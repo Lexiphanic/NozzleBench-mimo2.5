@@ -1,0 +1,149 @@
+name: Main
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: main-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and track main health
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+      - run: bun install --frozen-lockfile
+
+      - name: Test
+        id: test
+        continue-on-error: true
+        run: bun test
+
+      - name: Build
+        id: build
+        continue-on-error: true
+        run: bun run build
+
+      # Lifecycle: first red opens the issue; consecutive reds append to it;
+      # green closes it; a later red finds no open issue and opens a new one.
+      - name: Create or update broken-main issue
+        if: steps.test.outcome == 'failure' || steps.build.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          OPEN=$(gh issue list --repo "$GITHUB_REPOSITORY" --label main-broken --state open --json number -q '.[0].number // empty')
+          BODY="Main build failed on \`${GITHUB_SHA::7}\` — [run](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})"
+          if [ -n "$OPEN" ]; then
+            gh issue comment "$OPEN" --repo "$GITHUB_REPOSITORY" --body "Still broken: $BODY"
+            echo "updated issue #$OPEN"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "Main build is broken" --label main-broken --body "$BODY"
+          fi
+
+      - name: Close broken-main issue on green
+        if: steps.test.outcome == 'success' && steps.build.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue list --repo "$GITHUB_REPOSITORY" --label main-broken --state open --json number -q '.[].number' | while read -r N; do
+            gh issue close "$N" --repo "$GITHUB_REPOSITORY" --comment "Fixed by \`${GITHUB_SHA::7}\`."
+          done
+
+      - name: Fail the job when main is broken
+        if: steps.test.outcome == 'failure' || steps.build.outcome == 'failure'
+        run: exit 1
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Tag and release with changelog
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -f package.json ]; then
+            VERSION=$(jq -r '.version // empty' package.json)
+          else
+            PKG=$(ls packages/*/package.json 2>/dev/null | head -1)
+            VERSION=$(jq -r '.version // empty' "$PKG")
+          fi
+          [ -n "$VERSION" ] || { echo "no version found; skipping release"; exit 0; }
+          TAG="v$VERSION"
+
+          # Changelog: merged PRs since the previous tag (or the last 20 merged PRs).
+          PRS=""
+          LAST=$(git describe --tags --abbrev=0 2>/dev/null || true)
+          if [ -n "$LAST" ]; then
+            PRS=$(git log "$LAST..HEAD" --merges --format=%s | grep -oE '#[0-9]+' | tr -d '#' | sort -un)
+          fi
+          if [ -z "$PRS" ]; then
+            PRS=$(gh pr list --repo "$GITHUB_REPOSITORY" --state merged --limit 20 --json number -q '.[].number')
+          fi
+
+          if [ -z "$PRS" ]; then
+            CHANGELOG="Initial release of NozzleBench."
+          else
+            CHANGELOG="## What's Changed"
+            for N in $PRS; do
+              ROW=$(gh pr view "$N" --repo "$GITHUB_REPOSITORY" --json number,title,author \
+                -q '"* #\(.number) \(.title) by @\(.author.login)"') || continue
+              CHANGELOG="$CHANGELOG"$'\n'"$ROW"
+            done
+          fi
+
+          if git ls-remote --tags origin "$TAG" | grep -q .; then
+            echo "tag $TAG already exists; skipping"
+          else
+            git tag -a "$TAG" -m "Release $TAG"
+            git push origin "$TAG"
+          fi
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release $TAG already exists; skipping"
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "Release $TAG" --notes "$CHANGELOG"
+          fi
+
+  # TODO: Re-enable when apps/web produces real output (M3 — browser app).
+  # The web app is currently a TypeScript stub (`tsc --noEmit`), so there is
+  # no dist/ output to deploy.  Uncomment this job once M3 lands.
+  #
+  # pages:
+  #   name: Deploy to GitHub Pages
+  #   needs: build
+  #   runs-on: ubuntu-latest
+  #   permissions:
+  #     pages: write
+  #     id-token: write
+  #   environment: github-pages
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: oven-sh/setup-bun@v2
+  #     - name: Build web app
+  #       run: bun run --cwd apps/web build
+  #     - uses: actions/configure-pages@v5
+  #     - uses: actions/upload-pages-artifact@v3
+  #       with:
+  #         path: apps/web/dist
+  #     - uses: actions/deploy-pages@v4

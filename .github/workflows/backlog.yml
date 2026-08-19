@@ -1,0 +1,47 @@
+name: Backlog scan
+
+on:
+  schedule:
+    - cron: "30 5 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: backlog-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    name: Scan codebase for new work
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run omp backlog scan
+        timeout-minutes: 35
+        uses: ./.github/actions/run-omp
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OMP_MODEL: ${{ secrets.OMP_MODEL }}
+          OMP_MODELS_YAML: ${{ secrets.OMP_MODELS_YAML }}
+          OMP_TIMEOUT_MIN: "30"
+          OMP_TASK: |-
+            You are the NozzleBench backlog bot. Repo: $GITHUB_REPOSITORY. The gh CLI is authenticated (GH_TOKEN). You work in a checkout of the current codebase.
+            Your job is to keep the backlog populated with real, concrete work. Follow these steps exactly:
+            1. List existing open issues: `gh issue list --repo $GITHUB_REPOSITORY --state open --json number,title -q '.[] | "\(.number) \(.title)"'`.
+            2. Explore the codebase: read README.md, all package.json manifests, and the key source files; run `git log --oneline -20` for recent context; scan for TODOs, FIXMEs, dead code, missing tests, unhandled error paths, type-safety holes, performance issues, and missing documentation.
+            3. Identify actionable improvements and bugs grounded in what you actually saw, aligned with the project's architecture (TypeScript strict, Bun, packages under packages/, apps under apps/).
+            4. For each candidate, create an issue ONLY if no open issue already tracks it (compare titles and meaning; skip anything covered): `gh issue create --repo $GITHUB_REPOSITORY --title "<title>" --label backlog --body "<body>"` — the body names the file/symbol involved, states the concrete problem or improvement, and lists acceptance criteria.
+            5. Create AT MOST 10 new issues per run; if there are more candidates, file the highest-value ones.
+            6. Reply with a summary: issues created (number + title) and any strong findings skipped because they are already tracked.
+      - name: Capture cost
+        if: always()
+        uses: ./.github/actions/cost-tracking
+        with:
+          run_type: backlog

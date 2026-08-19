@@ -1,0 +1,48 @@
+name: Release train
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: release-train
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  train:
+    name: Merge reviewed PRs into release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Run release train
+        timeout-minutes: 35
+        uses: ./.github/actions/run-omp
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OMP_MODEL: ${{ secrets.OMP_MODEL }}
+          OMP_MODELS_YAML: ${{ secrets.OMP_MODELS_YAML }}
+          OMP_TIMEOUT_MIN: "30"
+          OMP_TASK: |-
+            You are the NozzleBench release-train bot running inside GitHub Actions.
+            Repo: $GITHUB_REPOSITORY. The gh CLI is authenticated (GH_TOKEN).
+            Get today's date with `date -u +%Y-%m-%d`. Follow these steps exactly:
+            1. Candidates: `gh pr list --repo $GITHUB_REPOSITORY --base release --state open --json number,title,isDraft,labels`.
+            2. For each PR: skip if isDraft; skip unless labels include `ai-passed-review`; run `gh pr checks <number> --repo $GITHUB_REPOSITORY --json state,conclusion` and skip unless every check has conclusion/state SUCCESS. Leave pending checks for the next run.
+            3. Merge each eligible PR: `gh pr merge <number> --repo $GITHUB_REPOSITORY --merge`. Record merged PRs (number + title).
+            4. Release PR to main: `gh pr list --repo $GITHUB_REPOSITORY --base main --head release --state open --json number`.
+               - If one is open and you merged PRs: update its body with `gh pr edit <n> --repo $GITHUB_REPOSITORY --body ...` listing the merged PRs.
+               - If none is open and you merged at least one PR: create one with `gh pr create --repo $GITHUB_REPOSITORY --base main --head release --title "release: <date>" --body ...` listing the merged PRs.
+               - Otherwise do nothing.
+            5. Reply with a summary: which PRs were merged, and the release PR number (if any).
+
+      - name: Capture cost
+        if: always()
+        uses: ./.github/actions/cost-tracking
+        with:
+          run_type: train

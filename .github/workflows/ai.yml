@@ -1,0 +1,143 @@
+name: AI review and fix
+
+on:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-ai-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: omp AI review
+    if: github.event.label.name == 'ai-needs-review' && github.event.pull_request.head.ref != 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      issues: write
+    steps:
+      # Check out the BASE branch: the review runs against the PR diff via gh,
+      # and the bot code must not come from the PR under review.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+
+      - name: Run AI review
+        id: review
+        continue-on-error: true
+        timeout-minutes: 25
+        uses: ./.github/actions/run-omp
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OMP_MODEL: ${{ secrets.OMP_MODEL }}
+          OMP_MODELS_YAML: ${{ secrets.OMP_MODELS_YAML }}
+          OMP_TIMEOUT_MIN: "20"
+          OMP_TASK: |-
+            You are the NozzleBench AI code reviewer running inside GitHub Actions.
+            Repo: $GITHUB_REPOSITORY. PR: #$PR_NUMBER. The gh CLI is authenticated (GH_TOKEN).
+            You work in a checkout of the base branch. Follow these steps exactly:
+            1. Context: run `gh pr view $PR_NUMBER --repo $GITHUB_REPOSITORY --json title,body,headRefName,baseRefName` and `gh pr diff $PR_NUMBER --repo $GITHUB_REPOSITORY`. Read README.md and key package files for project conventions (TypeScript strict, Bun, packages under packages/).
+            2. Count prior attempts: `gh pr view $PR_NUMBER --repo $GITHUB_REPOSITORY --json comments -q '.comments'`; count comments authored by github-actions[bot] whose body contains "AI review (attempt". This review is attempt (count + 1).
+            3. Review the diff for correctness, security, performance, and maintainability. Be specific: file, line, concrete issue.
+            4. Post ONE comment: `gh pr comment $PR_NUMBER --repo $GITHUB_REPOSITORY --body ...` starting with the exact line `## AI review (attempt N)`, then `**Verdict: PASS**` or `**Verdict: FAIL**`, a short summary, and a bullet list of issues (or _no issues_).
+            5. Manage labels: `gh pr edit $PR_NUMBER --repo $GITHUB_REPOSITORY --add-label ai-passed-review` on PASS, or `--add-label ai-failed-review` on FAIL. In BOTH cases remove `ai-needs-review`.
+            6. Reply with a one-line summary.
+            Constraints: do not modify or push files; do not touch issues. Comment and manage labels only. PASS requires no error-severity issues.
+
+      - name: Capture cost
+        if: always()
+        uses: ./.github/actions/cost-tracking
+        with:
+          run_type: review
+
+      - name: Tag review infrastructure failure
+        if: steps.review.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --add-label ai-review-error || true
+          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body $'## AI review — infrastructure failure\n\nThe omp review bot failed to complete. Re-run the workflow or investigate.' || true
+
+      - name: Fail when the review bot failed
+        if: steps.review.outcome == 'failure'
+        run: exit 1
+
+  fix:
+    name: omp AI fix
+    if: github.event.label.name == 'ai-failed-review' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref != 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Enforce fix-attempt cap
+        id: cap
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          COUNT=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json comments \
+            -q '[.comments[] | select((.author.login // "") == "github-actions[bot]" and (.body | contains("## AI fix attempt")))] | length')
+          echo "fix_count=$COUNT" >> "$GITHUB_ENV"
+          if [ "$COUNT" -ge 3 ]; then
+            gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --remove-label ai-failed-review || true
+            gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --add-label ai-needs-human || true
+            gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body $'## AI review — halted\n\n3 AI fix attempts exhausted without passing review. Marked `ai-needs-human`.' || true
+            echo "halted=1" >> "$GITHUB_ENV"
+          fi
+
+      - name: Run AI fix
+        if: env.halted != '1'
+        id: fix
+        continue-on-error: true
+        timeout-minutes: 35
+        uses: ./.github/actions/run-omp
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OMP_MODEL: ${{ secrets.OMP_MODEL }}
+          OMP_MODELS_YAML: ${{ secrets.OMP_MODELS_YAML }}
+          OMP_TIMEOUT_MIN: "30"
+          OMP_TASK: |-
+            You are the NozzleBench AI fixer running inside GitHub Actions.
+            Repo: $GITHUB_REPOSITORY. PR: #$PR_NUMBER. The gh CLI is authenticated (GH_TOKEN).
+            A previous AI review marked this PR as failed. Follow these steps exactly:
+            1. Context: run `gh pr view $PR_NUMBER --repo $GITHUB_REPOSITORY --json title,body,headRefName,baseRefName` and `gh pr diff $PR_NUMBER --repo $GITHUB_REPOSITORY`. Read the most recent comment by github-actions[bot] containing "AI review (attempt" to get the failing findings, then read the relevant files.
+            2. Check out the PR branch: `git fetch origin refs/pull/$PR_NUMBER/head`, then `git checkout -B <headRefName> FETCH_HEAD` (headRefName from step 1).
+            3. Fix the reported issues with the edit/write tools. Keep changes minimal and targeted. Do NOT change labels.
+            4. Verify: run `bun test` if it is fast enough, otherwise typecheck the changed files (e.g. `bunx tsc --noEmit` scoped to changed files). Fix any errors you introduced.
+            5. Commit and push: `git config user.name "NozzleBench-ai[bot]"`, `git config user.email "NozzleBench-ai[bot]@users.noreply.github.com"`, `git add -A`, `git commit -m "ai: apply fix for review findings"`, `git push origin HEAD:<headRefName>`.
+            6. Comment: `gh pr comment $PR_NUMBER --repo $GITHUB_REPOSITORY --body ...` starting with the exact line `## AI fix attempt N` where N = (count of prior comments by github-actions[bot] containing "## AI fix attempt") + 1. Summarize the changes.
+            7. Reply with a one-line summary.
+            Constraints: only touch the PR branch. If the findings cannot be addressed, post a comment explaining why and do not push.
+
+      - name: Capture cost
+        if: env.halted != '1' && always()
+        uses: ./.github/actions/cost-tracking
+        with:
+          run_type: fix
+
+      - name: Tag fix infrastructure failure
+        if: env.halted != '1' && steps.fix.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --add-label ai-needs-human || true
+          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body $'## AI fix — infrastructure failure\n\nThe omp fix bot failed to complete. Marked `ai-needs-human`.' || true
+
+      - name: Fail when the fix bot failed
+        if: env.halted != '1' && steps.fix.outcome == 'failure'
+        run: exit 1

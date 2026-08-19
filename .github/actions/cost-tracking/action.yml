@@ -1,0 +1,96 @@
+name: Cost tracking
+description: >-
+  Capture omp stats, compute per-run cost delta, write job summary,
+  and append to the cost-tracker issue.
+
+inputs:
+  run_type:
+    description: Label for this run (implement, review, fix, seed, backlog, train)
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Capture omp stats and report cost
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        RUN_TYPE: ${{ inputs.run_type }}
+      run: |
+        set -uo pipefail
+
+        STATS_PATH="$HOME/.omp/stats.json"
+        if [ ! -f "$STATS_PATH" ]; then
+          # Windows runner fallback
+          STATS_PATH="$USERPROFILE/.omp/stats.json" 2>/dev/null || true
+        fi
+        if [ ! -f "$STATS_PATH" ]; then
+          echo "::warning::omp stats not found; skipping cost tracking"
+          exit 0
+        fi
+
+        cp "$STATS_PATH" /tmp/omp_stats.json
+
+        # ── Parse cumulative stats ───────────────────────────────────
+        TOTAL_COST=$(jq -r '.overall.totalCost' /tmp/omp_stats.json)
+        TOTAL_RUNS=$(jq -r '.overall.totalRequests' /tmp/omp_stats.json)
+        INPUT_TOK=$(jq -r '.overall.totalInputTokens' /tmp/omp_stats.json)
+        OUTPUT_TOK=$(jq -r '.overall.totalOutputTokens' /tmp/omp_stats.json)
+        CACHE_TOK=$(jq -r '.overall.totalCacheReadTokens' /tmp/omp_stats.json)
+        CACHE_RATE=$(jq -r '.overall.cacheRate' /tmp/omp_stats.json)
+        CACHE_PCT=$(awk "BEGIN { printf \"%.1f\", $CACHE_RATE * 100 }")
+
+        # ── Per-model breakdown ──────────────────────────────────────
+        MODEL_TABLE=$(jq -r '.byModel[] | "| \(.model) | \(.provider) | \(.totalRequests) | $\(.totalCost | . * 1000 | round / 1000) | \(.totalInputTokens) | \(.totalOutputTokens) | \(.totalCacheReadTokens) |" ' /tmp/omp_stats.json)
+
+        # ── Job Summary ──────────────────────────────────────────────
+        {
+          echo "## 💰 AI Cost — ${RUN_TYPE}"
+          echo ""
+          echo "| Metric | Value |"
+          echo "|--------|-------|"
+          echo "| Cumulative cost | \$${TOTAL_COST} |"
+          echo "| Total requests | ${TOTAL_RUNS} |"
+          echo "| Input tokens | ${INPUT_TOK} |"
+          echo "| Output tokens | ${OUTPUT_TOK} |"
+          echo "| Cache reads | ${CACHE_TOK} |"
+          echo "| Cache hit rate | ${CACHE_PCT}% |"
+          echo ""
+          echo "### By model"
+          echo ""
+          echo "| Model | Provider | Requests | Cost | In | Out | Cache |"
+          echo "|-------|----------|----------|------|----|-----|-------|"
+          echo "${MODEL_TABLE}"
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        # ── Cost-tracker issue ───────────────────────────────────────
+        # Read last total cost from issue comments to compute delta.
+        COST_ISSUE=""
+        LAST_COST="0"
+        COST_ISSUE=$(gh issue list --repo "$GITHUB_REPOSITORY" \
+          --label cost-tracker --state open --json number \
+          -q '.[0].number // empty' 2>/dev/null || true)
+
+        if [ -n "$COST_ISSUE" ]; then
+          LAST_BODY=$(gh issue view "$COST_ISSUE" --repo "$GITHUB_REPOSITORY" \
+            --json comments -q '.comments[-1].body // empty' 2>/dev/null || true)
+          if [ -n "$LAST_BODY" ]; then
+            # Extract the cumulative cost from the last table row.
+            # Format: | ... | $0.644 | ... |
+            LAST_COST=$(echo "$LAST_BODY" \
+              | sed -n 's/.*\$[ ]*\([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' \
+              | tail -1 || echo "0")
+            [ -z "$LAST_COST" ] && LAST_COST="0"
+          fi
+        fi
+
+        DELTA=$(awk "BEGIN { d = $TOTAL_COST - $LAST_COST; if (d < 0) d = 0; printf \"%.6f\", d }")
+
+        DATE=$(date -u +%Y-%m-%dT%H:%M)
+
+        if [ -n "$COST_ISSUE" ]; then
+          gh issue comment "$COST_ISSUE" --repo "$GITHUB_REPOSITORY" --body "$(printf '| Timestamp | Run type | Cumulative | Delta | Requests | Cache |\n|-----------|----------|------------|-------|----------|-------|\n| %s | %s | \$%s | +\$%s | %s | %s%% |' \
+            "$DATE" "$RUN_TYPE" "$TOTAL_COST" "$DELTA" "$TOTAL_RUNS" "$CACHE_PCT")"
+        else
+          echo "::warning::cost-tracker issue not found; skipping issue comment"
+        fi

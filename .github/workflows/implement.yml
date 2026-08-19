@@ -1,0 +1,154 @@
+name: Implement backlog issues
+
+on:
+  schedule:
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+    inputs:
+      count:
+        description: Number of backlog issues to implement
+        required: false
+        default: "2"
+
+concurrency:
+  group: implement-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  select:
+    name: Select next issues
+    runs-on: ubuntu-latest
+    permissions:
+      issues: read
+      pull-requests: read
+    outputs:
+      issues: ${{ steps.select.outputs.issues }}
+      regenerate: ${{ steps.select.outputs.regenerate }}
+    steps:
+      - id: select
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          COUNT="${count:-2}"
+          ISSUES=$(gh issue list --repo "$GITHUB_REPOSITORY" --label backlog --state open --limit 100 \
+            --json number,title,createdAt -q 'sort_by(.createdAt)[] | "\(.number)\t\(.title)"')
+          if [ -z "$ISSUES" ]; then
+            echo "Backlog is empty - a new generation will be seeded"
+            echo "issues=[]" >> "$GITHUB_OUTPUT"
+            echo "regenerate=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "regenerate=false" >> "$GITHUB_OUTPUT"
+          OPEN_PRS=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --json body -q '.[].body // ""')
+          SELECTED="[]"
+          N=0
+          while IFS=$'\t' read -r NUM TITLE; do
+            [ "$N" -ge "$COUNT" ] && break
+            if printf '%s\n' "$OPEN_PRS" | grep -qE "#${NUM}\b"; then
+              echo "skip #$NUM (already has an open PR)"
+              continue
+            fi
+            SELECTED=$(printf '%s' "$SELECTED" | jq -c --argjson n "$NUM" --arg t "$TITLE" '. + [{number: $n, title: $t}]')
+            N=$((N + 1))
+          done <<< "$ISSUES"
+          echo "selected=$SELECTED"
+          echo "issues=$SELECTED" >> "$GITHUB_OUTPUT"
+
+  implement:
+    name: Implement issue #${{ matrix.issue.number }}
+    needs: select
+    if: needs.select.outputs.issues != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        issue: ${{ fromJson(needs.select.outputs.issues) }}
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Implement and open PR
+        timeout-minutes: 45
+        uses: ./.github/actions/run-omp
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ matrix.issue.number }}
+          OMP_MODEL: ${{ secrets.OMP_MODEL }}
+          OMP_MODELS_YAML: ${{ secrets.OMP_MODELS_YAML }}
+          OMP_TIMEOUT_MIN: "40"
+          OMP_TASK: |-
+            You are the NozzleBench implementer. Repo: $GITHUB_REPOSITORY. Issue: #$ISSUE_NUMBER. The gh CLI is authenticated (GH_TOKEN); bun is installed; the repo is checked out with full history.
+            Deliver a PR that resolves the issue. Follow these steps exactly:
+            1. Read the issue: `gh issue view $ISSUE_NUMBER --repo $GITHUB_REPOSITORY --json number,title,body,labels` — the body lists the acceptance criteria.
+            2. Explore the codebase (README.md, package.json manifests, the relevant source) and design the smallest change that satisfies the acceptance criteria, following existing conventions (TypeScript strict, Bun, packages under packages/, apps under apps/).
+            3. Branch: `git fetch origin`; the base is `release` if it exists, else the default branch. Create `feature/$ISSUE_NUMBER-<slug>` (slug from the issue title): `git checkout -B feature/$ISSUE_NUMBER-<slug> origin/<base>`.
+            4. Implement with the edit/write tools. Keep the change minimal and focused on the issue.
+            5. Verify: run `bun test` and `bun run build` if they are fast enough, otherwise typecheck the changed files (e.g. `bunx tsc --noEmit` scoped to changed files). Fix anything you broke.
+            6. Commit (git identity `NozzleBench-ai[bot]` / `NozzleBench-ai[bot]@users.noreply.github.com`) and push: `git push origin HEAD:feature/$ISSUE_NUMBER-<slug>`.
+            7. Open the PR: `gh pr create --repo $GITHUB_REPOSITORY --base release --head feature/$ISSUE_NUMBER-<slug> --title "<title>" --body "Closes #$ISSUE_NUMBER
+
+            <summary of the change and how it meets each acceptance criterion>"`. If a PR for the branch is already open, update it with `gh pr edit` instead.
+            8. Reply with the PR URL and a one-line summary.
+            Constraints: touch only your feature branch and its PR; never change labels or other branches. If the issue is too large to finish in one pass, implement the first coherent, working slice, state what remains in the PR body, and comment the remainder on the issue.
+
+      - name: Capture cost
+        if: always()
+        uses: ./.github/actions/cost-tracking
+        with:
+          run_type: implement
+
+  regenerate:
+    name: Re-seed backlog (new generation)
+    needs: select
+    if: needs.select.outputs.regenerate == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Tag the new generation on main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          LAST=$(git ls-remote --tags origin 'gen-*' | tr -d '\r' | grep -oE 'refs/tags/gen-[0-9]+' | grep -oE '[0-9]+' | sort -n | tail -1)
+          N=$(( ${LAST:-0} + 1 ))
+          TAG="gen-$N"
+          git tag -a "$TAG" -m "Generation $N"
+          git push origin "$TAG"
+          echo "tagged $TAG"
+
+      - name: Run omp re-seed task
+        timeout-minutes: 35
+        uses: ./.github/actions/run-omp
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OMP_MODEL: ${{ secrets.OMP_MODEL }}
+          OMP_MODELS_YAML: ${{ secrets.OMP_MODELS_YAML }}
+          OMP_TIMEOUT_MIN: "30"
+          OMP_TASK: |-
+            You are the NozzleBench reseed bot. Repo: $GITHUB_REPOSITORY. The gh CLI is authenticated (GH_TOKEN). You work in a checkout of the current codebase. The backlog is empty — create the next batch of work. Follow these steps exactly:
+            1. List existing open issues: `gh issue list --repo $GITHUB_REPOSITORY --state open --json number,title -q '.[] | "\(.number) \(.title)"'`.
+            2. Re-read README.md (the design contract): for every roadmap phase (M0..M5) and feature target, check the codebase and the existing issues — anything promised in the README but not yet tracked or implemented is candidate work.
+            3. Scan the codebase for concrete bugs, improvements, and tech debt (package manifests, source, `git log --oneline -20`, TODOs/FIXMEs, missing tests).
+            4. Create issues for candidates, skipping anything an open issue already tracks: `gh issue create --repo $GITHUB_REPOSITORY --title "<title>" --label backlog --body "<body>"` — the body names the file/symbol, states the problem or improvement, and lists acceptance criteria. Create AT MOST 10 per run, highest value first.
+            5. Reply with the list of created issues (number + title), or, if nothing new was found, reply explaining that the project appears complete and no new work was created.
+            Constraints: create issues only; never modify files, branches, or PRs. Use the `backlog` label as instructed.
+
+      - name: Capture cost
+        if: always()
+        uses: ./.github/actions/cost-tracking
+        with:
+          run_type: seed

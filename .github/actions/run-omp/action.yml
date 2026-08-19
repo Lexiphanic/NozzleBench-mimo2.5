@@ -1,0 +1,35 @@
+name: Run omp bot
+description: >-
+  Install the omp CLI and run one AI task non-interactively with `omp -p`.
+  Reads OMP_TASK, OMP_MODEL, OMP_TIMEOUT_MIN, and OMP_MODELS_YAML from the
+  step environment. Exits 0 on success, nonzero on failure/timeout.
+
+runs:
+  using: composite
+  steps:
+    - name: Run omp agent
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        # Install the CLI (user-local on the runner).
+        curl -fsSL https://omp.sh/install | sh
+        export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
+        command -v omp >/dev/null 2>&1 || { echo "::error::omp not found after install"; exit 2; }
+        omp --version
+
+        # Optional custom provider config (models.yml content from a secret).
+        if [ -n "${OMP_MODELS_YAML:-}" ]; then
+          mkdir -p "$HOME/.omp/agent"
+          printf '%s' "$OMP_MODELS_YAML" > "$HOME/.omp/agent/models.yml"
+        fi
+
+        [ -n "${OMP_TASK:-}" ] || { echo "::error::OMP_TASK is empty"; exit 2; }
+
+        TM=${OMP_TIMEOUT_MIN:-20}
+        TM=${TM%%.*}
+        omp -p "$OMP_TASK" --auto-approve --max-time "${TM}m" ${OMP_MODEL:+--model $OMP_MODEL} || {
+          code=$?
+          echo "::error::omp task failed with exit code ${code} (bounded by --max-time ${TM}m)"
+          exit "$code"
+        }

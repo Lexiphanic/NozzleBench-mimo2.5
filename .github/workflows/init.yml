@@ -1,0 +1,90 @@
+name: Init / Doctor
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  doctor:
+    name: Check labels and secrets
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      # Labels are assumed to exist everywhere else; run this once after
+      # enabling Actions (or whenever a label goes missing).
+      - name: Ensure labels exist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for L in ai-needs-review ai-passed-review ai-failed-review ai-needs-human ai-review-error main-broken backlog; do
+            if gh label view "$L" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              echo "label ok: $L"
+            else
+              echo "label missing, creating: $L"
+              gh label create "$L" --repo "$GITHUB_REPOSITORY" >/dev/null
+              echo "  created"
+            fi
+          done
+
+      - name: Check secrets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          AVAILABLE=$(gh secret list --repo "$GITHUB_REPOSITORY" --json name -q '.[].name' || true)
+          PROVIDERS="ANTHROPIC_API_KEY OPENAI_API_KEY DEEPSEEK_API_KEY OPENCODE_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY XAI_API_KEY LITELLM_API_KEY"
+          HAVE_PROVIDER=""
+          for S in $PROVIDERS; do
+            if printf '%s\n' "$AVAILABLE" | grep -qx "$S"; then
+              echo "secret ok: $S"
+              HAVE_PROVIDER=1
+            fi
+          done
+          if [ -z "$HAVE_PROVIDER" ]; then
+            echo "::error::no AI provider key configured - set at least one of: $PROVIDERS"
+          fi
+
+          for S in OMP_MODEL OMP_MODELS_YAML; do
+            if printf '%s\n' "$AVAILABLE" | grep -qx "$S"; then
+              echo "secret ok: $S"
+            else
+              echo "::warning::optional secret not set: $S"
+            fi
+          done
+
+          [ -n "$HAVE_PROVIDER" ] || { echo "Run init again after adding a provider key."; exit 1; }
+
+      - name: Ensure cost-tracker issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          EXISTING=$(gh issue list --repo "$GITHUB_REPOSITORY" --label cost-tracker --state open --json number -q '.[0].number // empty' || true)
+          if [ -n "$EXISTING" ]; then
+            echo "cost-tracker issue ok: #$EXISTING"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" \
+              --title "AI cost tracker" \
+              --label cost-tracker \
+              --body "$(cat <<'EOF'
+              Cumulative AI cost tracking for NozzleBench workflows.
+
+              | Timestamp | Run type | Cumulative | Delta | Requests | Cache |
+              |-----------|----------|------------|-------|----------|-------|
+
+              _This issue is auto-updated by the cost-tracking action after every omp run._
+              EOF
+            )"
+            echo "created cost-tracker issue"
+          fi
+
+      - name: Check GitHub Pages
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh api "repos/$GITHUB_REPOSITORY/pages" >/dev/null 2>&1; then
+            echo "pages ok: enabled"
+          else
+            echo "::warning::GitHub Pages is not enabled - enable it with 'GitHub Actions' as the build source so main.yml can deploy the web app"
+          fi

@@ -1,0 +1,57 @@
+name: Seed backlog
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: seed-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  seed:
+    name: Create backlog issues from README
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Tag generation 1 on main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if git ls-remote --tags origin 'gen-1' | grep -q .; then
+            echo "gen-1 already exists; skipping"
+          else
+            git tag -a gen-1 -m "Generation 1"
+            git push origin gen-1
+            echo "tagged gen-1"
+          fi
+
+      - name: Run omp seed task
+        timeout-minutes: 35
+        uses: ./.github/actions/run-omp
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OMP_MODEL: ${{ secrets.OMP_MODEL }}
+          OMP_MODELS_YAML: ${{ secrets.OMP_MODELS_YAML }}
+          OMP_TIMEOUT_MIN: "30"
+          OMP_TASK: |-
+            You are seeding the NozzleBench GitHub backlog. Repo: $GITHUB_REPOSITORY. The gh CLI is authenticated (GH_TOKEN).
+            README.md in this checkout is the design contract. Follow these steps exactly:
+            1. Read README.md.
+            2. List existing open issues: `gh issue list --repo $GITHUB_REPOSITORY --state open --json number,title -q '.[] | "\(.number) \(.title)"'`.
+            3. Create ONE issue per roadmap phase (M0..M5), with the phase deliverable and packages as acceptance criteria, and ONE issue per feature target: Core (Walls & surfaces, Infill, Supports & overhangs, First layer & adhesion, Special modes, Multi-plate & multi-material, Inspection) and Plugins (Calibration suite, Profile packs, Extensions), describing what must ship.
+            4. For each issue run `gh issue create --repo $GITHUB_REPOSITORY --title "<title>" --label backlog --body "<body>"` where the body quotes the relevant README section, lists concrete acceptance criteria, and names the roadmap phase it belongs to. Keep titles distinct and action-oriented (e.g. "M0: scaffold Bun workspaces and CI").
+            5. SKIP any issue whose title already exists among the open issues from step 2 — never duplicate.
+            6. Reply with the list of created issues (number + title) and a one-line next step.
+      - name: Capture cost
+        if: always()
+        uses: ./.github/actions/cost-tracking
+        with:
+          run_type: seed

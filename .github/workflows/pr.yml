@@ -1,0 +1,35 @@
+name: PR labels
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-labels-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  manage-labels:
+    name: Re-tag for AI review
+    # Every PR open/update: clear every ai-* label, then add ai-needs-review.
+    # The added label fires the `labeled` event that starts the omp review.
+    # Release-train PRs (head == release) skip the loop: their contents were
+    # already reviewed as individual PRs before being merged.
+    if: github.event.pull_request.head.ref != 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Clear ai-* labels, add ai-needs-review
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          N="${{ github.event.pull_request.number }}"
+          for L in ai-needs-review ai-passed-review ai-failed-review ai-needs-human ai-review-error; do
+            gh pr edit "$N" --repo "$GITHUB_REPOSITORY" --remove-label "$L" || true
+          done
+          gh pr edit "$N" --repo "$GITHUB_REPOSITORY" --add-label ai-needs-review

@@ -1,0 +1,52 @@
+name: Auto-merge to main
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+
+jobs:
+  auto-merge:
+    name: Auto-merge on green build
+    if: github.event.pull_request.base.ref == 'main'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Wait for checks, then enable auto-merge
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        timeout-minutes: 120
+        run: |
+          PR="${{ github.event.pull_request.number }}"
+          # Poll for up to 120 minutes, checking every 30 seconds
+          for i in $(seq 1 240); do
+            CHECKS=$(gh pr checks "$PR" --repo "$GITHUB_REPOSITORY" 2>&1 || true)
+            if echo "$CHECKS" | grep -q "no checks"; then
+              echo "Attempt $i: No checks reported yet; waiting..."
+              sleep 30
+              continue
+            fi
+            # Checks exist — check conclusions
+            if echo "$CHECKS" | grep -qvE "(success|neutral)"; then
+              # At least one check is pending or failing
+              if echo "$CHECKS" | grep -qE "(pending|queued|in_progress|expected)"; then
+                echo "Attempt $i: Checks still running; waiting..."
+                sleep 30
+                continue
+              fi
+              # All checks done but some failed
+              echo "Build is failing:"
+              echo "$CHECKS"
+              gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body "Build is failing — this PR will not be auto-merged to main."
+              exit 0
+            fi
+            # All checks passed
+            echo "All checks passed. Enabling auto-merge..."
+            gh pr merge "$PR" --auto --merge || echo "auto-merge unavailable (check repo settings)"
+            exit 0
+          done
+          echo "Timed out waiting for checks after 120 minutes."
