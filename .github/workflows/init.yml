@@ -76,15 +76,12 @@ jobs:
             gh issue create --repo "$GITHUB_REPOSITORY" \
               --title "AI cost tracker" \
               --label cost-tracker \
-              --body "$(cat <<'EOF'
-              Cumulative AI cost tracking for NozzleBench workflows.
+              --body "Cumulative AI cost tracking for NozzleBench workflows.
 
               | Timestamp | Run type | Cumulative | Delta | Requests | Cache |
               |-----------|----------|------------|-------|----------|-------|
 
-              _This issue is auto-updated by the cost-tracking action after every omp run._
-              EOF
-            )"
+              _This issue is auto-updated by the cost-tracking action after every omp run._"
             echo "created cost-tracker issue"
           fi
 
