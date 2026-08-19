@@ -82,6 +82,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ISSUE_NUMBER: ${{ matrix.issue.number }}
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           OMP_MODEL: ${{ secrets.OMP_MODEL }}
           OMP_MODELS_YAML: ${{ secrets.OMP_MODELS_YAML }}
           OMP_TIMEOUT_MIN: "40"
@@ -138,6 +139,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OMP_MODEL: ${{ secrets.OMP_MODEL }}
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           OMP_MODELS_YAML: ${{ secrets.OMP_MODELS_YAML }}
           OMP_TIMEOUT_MIN: "30"
           OMP_TASK: |-

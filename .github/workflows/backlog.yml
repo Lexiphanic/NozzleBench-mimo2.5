@@ -28,6 +28,7 @@ jobs:
         uses: ./.github/actions/run-omp
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           OMP_MODEL: ${{ secrets.OMP_MODEL }}
           OMP_MODELS_YAML: ${{ secrets.OMP_MODELS_YAML }}
           OMP_TIMEOUT_MIN: "30"
