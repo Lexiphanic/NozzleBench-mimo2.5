@@ -1,0 +1,49 @@
+{
+  "lockfileVersion": 1,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "nozzle-bench",
+      "devDependencies": {
+        "typescript": "^5.7.0",
+      },
+    },
+    "packages/engine": {
+      "name": "@nozzle-bench/engine",
+      "version": "0.1.0",
+      "dependencies": {
+        "@nozzle-bench/profiles": "workspace:*",
+      },
+      "devDependencies": {
+        "typescript": "^5.7.0",
+      },
+    },
+    "packages/gcode": {
+      "name": "@nozzle-bench/gcode",
+      "version": "0.1.0",
+      "dependencies": {
+        "@nozzle-bench/engine": "workspace:*",
+        "@nozzle-bench/profiles": "workspace:*",
+      },
+      "devDependencies": {
+        "typescript": "^5.7.0",
+      },
+    },
+    "packages/profiles": {
+      "name": "@nozzle-bench/profiles",
+      "version": "0.1.0",
+      "devDependencies": {
+        "typescript": "^5.7.0",
+      },
+    },
+  },
+  "packages": {
+    "@nozzle-bench/engine": ["@nozzle-bench/engine@workspace:packages/engine"],
+
+    "@nozzle-bench/gcode": ["@nozzle-bench/gcode@workspace:packages/gcode"],
+
+    "@nozzle-bench/profiles": ["@nozzle-bench/profiles@workspace:packages/profiles"],
+
+    "typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
+  }
+}
