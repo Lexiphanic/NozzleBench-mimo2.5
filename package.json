@@ -1,0 +1,13 @@
+{
+  "name": "@NozzleBench/NozzleBench",
+  "private": true,
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "build": "bun run --filter '@NozzleBench/*' build",
+    "test": "bun test",
+    "lint": "bunx eslint ."
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  }
+}

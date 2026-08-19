@@ -1,0 +1,36 @@
+{
+  "lockfileVersion": 1,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "@NozzleBench/NozzleBench",
+      "devDependencies": {
+        "typescript": "^5.7.0",
+      },
+    },
+    "packages/engine": {
+      "name": "@NozzleBench/engine",
+      "version": "0.1.0",
+      "dependencies": {
+        "@NozzleBench/plugin-sdk": "workspace:*",
+      },
+      "devDependencies": {
+        "typescript": "^5.7.0",
+      },
+    },
+    "packages/plugin-sdk": {
+      "name": "@NozzleBench/plugin-sdk",
+      "version": "0.1.0",
+      "devDependencies": {
+        "typescript": "^5.7.0",
+      },
+    },
+  },
+  "packages": {
+    "@NozzleBench/engine": ["@NozzleBench/engine@workspace:packages/engine"],
+
+    "@NozzleBench/plugin-sdk": ["@NozzleBench/plugin-sdk@workspace:packages/plugin-sdk"],
+
+    "typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
+  }
+}
