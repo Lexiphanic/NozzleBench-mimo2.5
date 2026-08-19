@@ -20,12 +20,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           for L in ai-needs-review ai-passed-review ai-failed-review ai-needs-human ai-review-error main-broken backlog; do
-            if gh label view "$L" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            OUTPUT=$(gh label create "$L" --repo "$GITHUB_REPOSITORY" 2>&1) && CREATED=1 || CREATED=0
+            if echo "$OUTPUT" | grep -q "already exists"; then
               echo "label ok: $L"
             else
-              echo "label missing, creating: $L"
-              gh label create "$L" --repo "$GITHUB_REPOSITORY" >/dev/null
-              echo "  created"
+              echo "  created: $L"
             fi
           done
 
