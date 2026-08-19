@@ -28,6 +28,8 @@ jobs:
           if git ls-remote --tags origin 'gen-1' | grep -q .; then
             echo "gen-1 already exists; skipping"
           else
+            git config user.name "NozzleBench-ai[bot]"
+            git config user.email "NozzleBench-ai[bot]@users.noreply.github.com"
             git tag -a gen-1 -m "Generation 1"
             git push origin gen-1
             echo "tagged gen-1"

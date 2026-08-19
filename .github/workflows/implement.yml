@@ -126,6 +126,8 @@ jobs:
           LAST=$(git ls-remote --tags origin 'gen-*' | tr -d '\r' | grep -oE 'refs/tags/gen-[0-9]+' | grep -oE '[0-9]+' | sort -n | tail -1)
           N=$(( ${LAST:-0} + 1 ))
           TAG="gen-$N"
+          git config user.name "NozzleBench-ai[bot]"
+          git config user.email "NozzleBench-ai[bot]@users.noreply.github.com"
           git tag -a "$TAG" -m "Generation $N"
           git push origin "$TAG"
           echo "tagged $TAG"
