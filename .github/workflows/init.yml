@@ -32,22 +32,32 @@ jobs:
       - name: Check secrets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+          LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
+          OMP_MODEL: ${{ secrets.OMP_MODEL }}
+          OMP_MODELS_YAML: ${{ secrets.OMP_MODELS_YAML }}
         run: |
-          AVAILABLE=$(gh secret list --repo "$GITHUB_REPOSITORY" --json name -q '.[].name' || true)
-          PROVIDERS="ANTHROPIC_API_KEY OPENAI_API_KEY DEEPSEEK_API_KEY OPENCODE_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY XAI_API_KEY LITELLM_API_KEY"
           HAVE_PROVIDER=""
-          for S in $PROVIDERS; do
-            if printf '%s\n' "$AVAILABLE" | grep -qx "$S"; then
+          for S in ANTHROPIC_API_KEY OPENAI_API_KEY DEEPSEEK_API_KEY OPENCODE_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY XAI_API_KEY LITELLM_API_KEY; do
+            VAL="${!S}"
+            if [ -n "$VAL" ]; then
               echo "secret ok: $S"
               HAVE_PROVIDER=1
             fi
           done
           if [ -z "$HAVE_PROVIDER" ]; then
-            echo "::error::no AI provider key configured - set at least one of: $PROVIDERS"
+            echo "::error::no AI provider key configured - set at least one of: ANTHROPIC_API_KEY OPENAI_API_KEY DEEPSEEK_API_KEY OPENCODE_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY XAI_API_KEY LITELLM_API_KEY"
           fi
 
           for S in OMP_MODEL OMP_MODELS_YAML; do
-            if printf '%s\n' "$AVAILABLE" | grep -qx "$S"; then
+            VAL="${!S}"
+            if [ -n "$VAL" ]; then
               echo "secret ok: $S"
             else
               echo "::warning::optional secret not set: $S"
