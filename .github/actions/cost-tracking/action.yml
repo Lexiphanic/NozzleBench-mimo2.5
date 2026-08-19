@@ -22,7 +22,7 @@ runs:
         STATS_PATH="$HOME/.omp/stats.json"
         if [ ! -f "$STATS_PATH" ]; then
           # Windows runner fallback
-          STATS_PATH="$USERPROFILE/.omp/stats.json" 2>/dev/null || true
+          STATS_PATH="${USERPROFILE:-}/.omp/stats.json" 2>/dev/null || true
         fi
         if [ ! -f "$STATS_PATH" ]; then
           echo "::warning::omp stats not found; skipping cost tracking"
