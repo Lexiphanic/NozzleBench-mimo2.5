@@ -1,0 +1,10 @@
+{
+  "name": "@NozzleBench/root",
+  "private": true,
+  "workspaces": ["packages/*", "apps/*"],
+  "scripts": {
+    "dev": "bun --filter '@NozzleBench/*' run dev",
+    "build": "bun --filter '@NozzleBench/*' run build",
+    "test": "bun --filter '@NozzleBench/*' run test"
+  }
+}
